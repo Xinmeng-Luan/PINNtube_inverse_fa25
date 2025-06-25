@@ -519,7 +519,6 @@ class Trainer:
 
         # Restore the model and optimizer state dictionaries
         model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-
         # Retrieve the epoch and loss values
         epoch = checkpoint['epoch']
         tot_losses = checkpoint['tot_losses']
