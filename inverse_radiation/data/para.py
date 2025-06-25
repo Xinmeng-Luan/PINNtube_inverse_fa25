@@ -1,10 +1,12 @@
 """
-Paramters
-
-if non-constant cross-section: A structure needs to be changed
+Physical parameters
+----------------------------------------------------------------------------
+- Acoustic Field Reconstruction in Tubes via Physics-Informed Neural Networks
+- Forum Acusticum 25
+- by Xinmeng Luan
+- xinmeng.luan@mail.mcgill.ca
 """
 
-# from scipy.stats.qmc import Sobol
 import numpy as np
 import sys
 import scipy.io

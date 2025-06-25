@@ -1,34 +1,25 @@
 """
-training module
-input separately for pde, bc
-WORKED!!!! finally
-
+main training script
+----------------------------------------------------------------------------
+- Acoustic Field Reconstruction in Tubes via Physics-Informed Neural Networks
+- Forum Acusticum 25
+- by Xinmeng Luan
+- xinmeng.luan@mail.mcgill.ca
 """
 
 import os
 import sys
-sys.path.append('/nas/home/xluan/thesis-xinmeng')
 import torch
-import PINN_wind.pinn_wind.main.data.para as PARA
-
-from torch.nn import functional as F
+import inverse_radiation.data.para as PARA
 from scipy.stats.qmc import Sobol
 import pickle
-import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
-from torch.optim.lr_scheduler import ReduceLROnPlateau
- #TODO: terminal
 from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
-import torch.nn.init as init
-import math
 from tqdm import tqdm
 from scipy.io import loadmat
-from torch.optim.lr_scheduler import ExponentialLR
 import scipy.io
 
-os.environ["LD_LIBRARY_PATH"] = "/nas/home/xluan/miniconda3/envs/thesis/lib:/nas/home/xluan/miniconda3/envs/thesis/lib/cuda/lib64"
 os.environ['CUDA_ALLOW_GROWTH'] = 'True'
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
@@ -37,10 +28,8 @@ np.random.seed(PARA.seed)
 torch.manual_seed(PARA.seed)
 torch.cuda.manual_seed(PARA.seed)
 torch.cuda.manual_seed_all(PARA.seed)
-# When running on the CuDNN backend, two further options must be set
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
-# Set a fixed value for the hash seed
 os.environ["PYTHONHASHSEED"] = str(PARA.seed)
 torch.use_deterministic_algorithms(True)
 print(f"Random seed set as {PARA.seed}")
@@ -65,7 +54,6 @@ print(now.strftime("%Y-%m-%d %H:%M:%S"))
 
 
 Ai_pde = PARA.A
-# Ai_pde = torch.tensor(PARA.A).to(device).to(torch.float32) * torch.ones_like(xi_pde)
 Ai_x_pde = 0
 
 
@@ -80,13 +68,11 @@ class Trainer:
         self.R_losses = []
         self.O_losses = []
         self.O1_losses = []
-        # self.O2_losses = []
         self.rad_alphas = []
         self.rad_betas = []
 
         self.model = model
         self.main_optimizer = main_optimizer
-        # self.addi_optimizer = addi_optimizer
         self.n_epochs = n_epochs
 
     def rand_pde_points(self):
@@ -97,11 +83,11 @@ class Trainer:
         return xi_pde, ti_pde
 
     def get_data(self):
+        #TODO: Needed to be changed to your path
         input_data_path = '/nas/home/xluan/thesis-xinmeng/PINN_wind/input_data/data_input_pinn_forward.pkl'
         with open(input_data_path, 'rb') as f:
             data = pickle.load(f)
 
-            # Access individual tensors
         x_pde = data['x_pde'].to(device)
         t_pde = data['t_pde'].to(device)
         x_bc = data['x_bc'].to(device)
@@ -113,22 +99,15 @@ class Trainer:
         x_perT = data['x_perT'].to(device)
         t_perT = data['t_perT'].to(device)
 
-        # obser_data_path_all = '/nas/home/xluan/thesis-xinmeng/PINN_wind/pinn_wind/main/data/observe_all_infinite_flanged_data.mat'
-        # data_all = loadmat(obser_data_path_all)
-        # p_all_infinite_flanged = torch.tensor(data_all['p_all_infinite_flanged']).squeeze().to(device).to(torch.float32)
-        # x_all_ob = torch.tensor(data_all['x']).squeeze().to(device).to(torch.float32)
-        # t_all_ob = torch.tensor(data_all['t']).squeeze().to(device).to(torch.float32)
-
+        # TODO: Needed to be changed to your path
         obser_data_path_end = '/nas/home/xluan/thesis-xinmeng/PINN_wind/pinn_wind/main/data/observe_end_infinite_flanged_data.mat'
         data_end = loadmat(obser_data_path_end)
         p_end_infinite_flanged = data_end['p_end_infinite_flanged'].squeeze()
-       # add noise
+        # Add noise
         signal_power = np.mean(p_end_infinite_flanged ** 2)
         SNR_dB = 40
-        # Calculate the noise power from the SNR
         SNR_linear = 10 ** (SNR_dB / 10)  # Convert SNR from dB to linear scale
         noise_power = signal_power / SNR_linear
-        # Generate AWGN noise with zero mean and the calculated noise power
         noise = np.sqrt(noise_power) * np.random.randn(len(p_end_infinite_flanged))
         p_end_infinite_flanged = p_end_infinite_flanged + noise
         p_end_infinite_flanged = torch.tensor(p_end_infinite_flanged).squeeze().to(device).to(torch.float32)
@@ -149,8 +128,6 @@ class Trainer:
         t_perT = t_perT / PARA.T * 2 - 1
         x_end_ob = x_end_ob / PARA.l * 2 - 1
         t_end_ob = t_end_ob / PARA.T * 2 - 1
-        # x_all_ob = x_all_ob / PARA.l * 2 - 1
-        # t_all_ob = t_all_ob / PARA.T * 2 - 1
 
         x_pde.requires_grad = True
         t_pde.requires_grad = True
@@ -165,12 +142,9 @@ class Trainer:
         x_end_ob.requires_grad = True
         t_end_ob.requires_grad = True
         p_end_infinite_flanged.requires_grad = True
-        # x_all_ob.requires_grad = True
-        # t_all_ob.requires_grad = True
-        # p_all_infinite_flanged.requires_grad = True
 
         return (x_pde, t_pde, x_bc, t_bc, x_coup, t_coup, x_per0, t_per0, x_perT, t_perT,
-                x_end_ob, t_end_ob, p_end_infinite_flanged) #, x_all_ob, t_all_ob, p_all_infinite_flanged)
+                x_end_ob, t_end_ob, p_end_infinite_flanged)
 
     def calc_grad(self, y, x) -> torch.Tensor:
         grad = torch.autograd.grad(
@@ -213,14 +187,10 @@ class Trainer:
     def pde_loss(self, model, x, t):
         phi = model(x, t, PARA.alpha_phi)
         phi = phi.squeeze()
-        # u_coup = u_coup.squeeze()
         phi_x = self.calc_grad(phi, x) / PARA.cx
         phi_xx = self.calc_grad(phi_x, x) / PARA.cx
         phi_t = self.calc_grad(phi, t) / PARA.ct
         phi_tt = self.calc_grad(phi_t, t) / PARA.ct
-        # l_E = torch.mean((PARA.c ** 2 * (phi_xx
-        #                                  + 1 / PARA.A * Ai_x_pde * phi_x
-        #                                  - PARA.rho / PARA.K * phi_tt)) ** 2)
         l_E = torch.mean((PARA.c ** 2 * (phi_xx
                                          + 1 / PARA.A * Ai_x_pde * phi_x
                                          - PARA.G * PARA.R * phi
@@ -233,10 +203,9 @@ class Trainer:
     def bc_loss(self, model, x, t):
         phi = model(x, t, PARA.alpha_phi)
         phi = phi.squeeze()
-        # u_coup = u_coup.squeeze()
         phi_x = self.calc_grad(phi, x) / PARA.cx
         l_B = torch.mean((-phi_x - torch.tensor(PARA.u0).to(device).to(
-            torch.float32)) ** 2)  # F.mse_loss(-phi_x, torch.tensor(PARA.u0).to(device).to(torch.float32))
+            torch.float32)) ** 2)
         return l_B
 
     def bc_rad_loss(self, model, x, t):
@@ -248,19 +217,14 @@ class Trainer:
         p = PARA.R * PARA.A * phi + PARA.rho * phi_t
         ut = self.calc_grad(u, t) / PARA.ct
         pt = self.calc_grad(p, t) / PARA.ct
-        # rad_alpha = 1 / model.rad_delta  # 1.2141816415735793
-        # rad_beta = model.rad_beta_chaigne / (model.rad_delta ** 2)  # 0.737118529367156
-
         l_rad = torch.mean((PARA.rho * PARA.c / PARA.A * ut - model.rad_alpha * p - model.rad_beta * pt) ** 2)
         return l_rad
 
     def periodicity_loss(self, model, x0, t0, xT, tT):
         phi0 = model(x0, t0, PARA.alpha_phi)
         phi0 = phi0.squeeze()
-        # u_coup0 = u_coup0.squeeze()
         phiT = model(xT, tT, PARA.alpha_phi)
         phiT = phiT.squeeze()
-        # u_coupT = u_coupT.squeeze()
         phi_x0 = self.calc_grad(phi0, x0) / PARA.cx
         phi_xT = self.calc_grad(phiT, xT) / PARA.cx
         phi_t0 = self.calc_grad(phi0, t0) / PARA.ct
@@ -275,14 +239,12 @@ class Trainer:
         return l_Pu, l_Pp, l_Pt
 
     def obser_loss(self, model, x, t, p_end_infinite_flanged):
-        # radiation pos
         phi = model(x, t, PARA.alpha_phi)
         phi = phi.squeeze()
 
         phi_t = self.calc_grad(phi, t) / PARA.ct
         p = PARA.R * PARA.A * phi + PARA.rho * phi_t
 
-        # TODO
         l_O = torch.mean((p - p_end_infinite_flanged ) ** 2)
 
         return l_O
@@ -302,15 +264,9 @@ class Trainer:
         xi_tot_np = xi_tot_np / xi_tot_np.max()
         ti_tot_np = ti_tot_np / ti_tot_np.max()
 
-        # Create a contour plot
-        # levels = 100  # Increase the number of levels for smoother gradients
-        # contour = plt.tricontourf(xi_tot_np, ti_tot_np, p_np, levels=levels, cmap='jet')
+        # Contour plot
         contour = plt.tricontourf(xi_tot_np, ti_tot_np, p_np, levels=1000, cmap='jet')
-
-        # Add colorbar to show the mapping of values to colors
         plt.colorbar(contour, label='p values')
-
-        # Set axis labels and title
         plt.xlabel('x [m]', fontsize=12)
         plt.ylabel('t [s]', fontsize=12)
         plt.title('Predict pressure [Pa]', fontsize=14)
@@ -320,46 +276,32 @@ class Trainer:
         torch.save({
             'model_state_dict': model.state_dict(),
             'main_optimizer_state_dict': main_optimizer.state_dict(),
-            # 'addi_optimizer_state_dict': addi_optimizer.state_dict(),
             'epoch': epoch,
             'tot_losses': tot_losses,
             'E_losses': E_losses,
             'B_losses': B_losses,
             'P_losses': P_losses,
-            # 'R_losses': R_losses,
             'O1_losses': O1_losses,
-            # 'O2_losses': O2_losses,
-            # 'p': p,
-            # 'rad_alphas': rad_alphas,
-            # 'rad_betas': rad_betas
         }, path)
 
     def train(self):
         # get dataset
         (x_pde, t_pde, x_bc, t_bc, x_coup, t_coup, x_per0, t_per0, x_perT, t_perT,
          x_end_ob, t_end_ob, p_end_infinite_flanged) = self.get_data()
-        # addi_scheduler = ExponentialLR(addi_optimizer, gamma=0.99)
-        # tolerance = 1000
-        # counter = 0
+
 
         # for epoch in range(n_epochs):
         for epoch in tqdm(range(self.n_epochs), desc="Training Epochs", leave=True):
             main_optimizer.zero_grad()
-            # addi_optimizer.zero_grad()
-            # single batch
             l_E, p = self.pde_loss(model, x_pde, t_pde)
             l_B = self.bc_loss(model, x_bc, t_bc)
-            # l_R = self.bc_rad_loss(model, x_coup, t_coup)
             l_Pu, l_Pp, l_Pt = self.periodicity_loss(model, x_per0, t_per0, x_perT, t_perT)
             l_O1 = self.obser_loss(model, x_end_ob, t_end_ob, p_end_infinite_flanged)
-            # l_O2 = self.obser_loss(model, x_all_ob, t_all_ob, p_all_infinite_flanged)
 
             l_E = PARA.lambda_E * l_E
             l_B = PARA.lambda_B * l_B
-            # l_R = PARA.lambda_rad * l_R
             l_P = PARA.lambda_P * (PARA.lambda_u * l_Pu + PARA.lambda_p * l_Pp + PARA.lambda_t * l_Pt)
             l_O1 = 1 * PARA.lambda_P * PARA.lambda_p * l_O1
-            # l_O2 = 1 * PARA.lambda_P * PARA.lambda_p * l_O2
 
             loss = (l_E + l_B + l_P + l_O1 )
 
@@ -367,41 +309,23 @@ class Trainer:
             main_optimizer.step()
             main_optimizer.param_groups[0]['lr'] = self.lr_schedule(PARA.lr, PARA.beta, epoch)
 
-            # addi_optimizer.step()
-            # counter += 1
-            # if counter >= tolerance:
-            #     addi_scheduler.step()
-            #     counter = 0
-
-            # print(f"Epoch {epoch}: Learning Rate = {addi_scheduler.get_last_lr()[0]:.6f}")
-            # addi_optimizer.param_groups[0]['lr'] = self.lr_schedule(1e-2, PARA.beta, epoch)
-
             self.tot_losses.append(loss.detach().cpu().item())
             self.E_losses.append(l_E.detach().cpu().item())
             self.B_losses.append(l_B.detach().cpu().item())
             self.P_losses.append(l_P.detach().cpu().item())
-            # self.R_losses.append(l_R.detach().cpu().item())
             self.O1_losses.append(l_O1.detach().cpu().item())
-            # self.O2_losses.append(l_O2.detach().cpu().item())
-            # self.rad_alphas.append(model.rad_alpha.detach().cpu().numpy())
-            # self.rad_betas.append(model.rad_beta.detach().cpu().numpy())
 
             if (epoch+1) % 100 == 0:
                 print('Train\t Epoch: {:3} \tTotal Loss: {:.6f}'.format(epoch, loss))
                 print('\t PDE Loss: {:.6f}'.format(l_E))
                 print('\t BC Loss: {:.6f}'.format(l_B))
-                # print('\t Radiation Loss: {:.6f}'.format(l_R))
                 print('\t Periodicity Loss: {:.6f}'.format(l_P))
                 print('\t Observation Loss end: {:.6f}'.format(l_O1))
-                # print('\t Observation Loss all: {:.6f}'.format(l_O2))
-                # print('\t alpha: {:.6f}'.format(model.rad_alpha.detach().cpu().numpy()))
-                # print('\t beta: {:.6f}'.format(model.rad_beta.detach().cpu().numpy()))
 
             del l_E, l_B, l_P, l_O1,  p
             torch.cuda.empty_cache()
 
             if (epoch+1) % 5000 == 0:
-                # self.vis_p(x_pde, t_pde, p)
 
                 save_path = (f'/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/norad_noise_snr40/'
                              f'inverse_model_{epoch + 1}.pth')
@@ -415,23 +339,14 @@ class Trainer:
     def load_trained_model(self, model, main_optimizer, path):
         # Load the checkpoint
         checkpoint = torch.load(path)
-
-        # Restore the model and optimizer state dictionaries
         model.load_state_dict(checkpoint['model_state_dict'])
         main_optimizer.load_state_dict(checkpoint['main_optimizer_state_dict'])
-        # addi_optimizer.load_state_dict(checkpoint['addi_optimizer_state_dict'])
-
-        # Retrieve the epoch and loss values
         epoch = checkpoint['epoch']
         tot_losses = checkpoint['tot_losses']
         E_losses = checkpoint['E_losses']
         B_losses = checkpoint['B_losses']
         P_losses = checkpoint['P_losses']
-        # R_losses = checkpoint['R_losses']
         O1_losses = checkpoint['O1_losses']
-        # O2_losses = checkpoint['O2_losses']
-        # alphas = checkpoint['rad_alphas']
-        # betas = checkpoint['rad_betas']
 
         return model, main_optimizer,epoch, tot_losses, E_losses, B_losses, P_losses, O1_losses
 
@@ -439,13 +354,9 @@ class Trainer:
     def plot_losses(self, tot_losses, E_losses, B_losses, P_losses):
         plt.figure(figsize=(12, 8))
 
-        # Plot losse
-        # plt.plot( R_losses, label='R Loss', color='blue', linestyle='-', linewidth=2)
         plt.plot(P_losses, label='P Loss', color='yellow', linestyle='-', linewidth=2)
         plt.plot( B_losses, label='B Loss', color='green', linestyle='-.', linewidth=2)
         plt.plot( E_losses, label='E Loss', color='lightblue', linestyle='-', linewidth=2)
-        # plt.plot(O1_losses, label='O1 Loss', color='brown', linestyle='-', linewidth=2)
-        # plt.plot(O2_losses, label='O1 Loss', color='purple', linestyle='-', linewidth=2)
         plt.plot( tot_losses, label='Total Loss', color='red', linewidth=2)
         plt.yscale('log')
         plt.title('Losses Over Epochs', fontsize=14)
@@ -454,21 +365,16 @@ class Trainer:
         plt.legend(loc='upper right', fontsize=10)
         plt.grid(True)
 
-        # Adjust layout and show plot
         plt.tight_layout()
-        # plt.savefig('losses_and_parameters_over_time.png', dpi=300)
         plt.show()
 
 
 
     def vis_p_loc(self, t, p, loc):
+        # TODO: Needed to be changed to your path
         obser_data_path = '/nas/home/xluan/thesis-xinmeng/PINN_wind/pinn_wind/main/data/observe_end_infinite_flanged_data.mat'
         data = loadmat(obser_data_path)
-
-        # Access variables
         p_end_infinite_flanged = data['p_end_infinite_flanged']
-        # t_end_ob = data['t']
-
 
         plt.plot(t.detach().cpu().numpy(), p.detach().cpu().numpy(), label='PINN', color='green', linestyle='-.', linewidth=2)
         plt.plot(t.detach().cpu().numpy(), p_end_infinite_flanged.squeeze(), label='FD', color='blue',linestyle=':', linewidth=2)
@@ -484,89 +390,22 @@ class Trainer:
         E_losses = [loss for loss in E_losses]
         B_losses = [loss for loss in B_losses]
         P_losses = [loss for loss in P_losses]
-        # R_losses = [loss for loss in R_losses]
-        # O1_losses = [loss for loss in O1_losses]
-        # O2_losses = [loss for loss in O2_losses]
-        # alphas= [loss for loss in alphas]
-        # betas = [loss for loss in betas]
 
         (x_pde, t_pde, x_bc, t_bc, x_coup, t_coup, x_per0, t_per0, x_perT, t_perT,
          x_end_ob, t_end_ob, p_end_infinite_flanged) = self.get_data()
 
-        # x_fd = torch.linspace(-1,1,5001).to(device)
-        # t_fd = torch.linspace(-1,1, 1001).to(device)
-        # x_fd, t_fd= torch.meshgrid(x_fd, t_fd, indexing='ij')
-        # x_fd.requires_grad = True
-        # t_fd.requires_grad = True
-        # p_fd =[]
-        # for index in range(x_fd.shape[1]):
-        #     p_tmp = self.get_p(model, x_fd[:,index].squeeze(), t_fd[:,index].squeeze()).detach().cpu().numpy()
-        #     p_fd.append(p_tmp)
-        # p_fd = np.array(p_fd).T
-        #
-        # # Assuming p_fd is a 2D array or tensor of shape (1001, 5001)
-        # plt.figure(figsize=(12, 8))
-        #
-        # # Visualize the 2D data
-        # plt.imshow(p_fd, aspect='auto', origin='lower', cmap='jet', extent=[-1, 1, -1, 1])
-        #
-        # # Add labels and colorbar
-        # plt.colorbar(label=r'$p$ [Pa]')  # Colorbar with label
-        # plt.xlabel(r'$x$', fontsize=20)
-        # plt.ylabel(r'$t$', fontsize=20)
-        # plt.title(r'Pressure Field $p(x, t)$', fontsize=20)
-        # plt.xticks(fontsize=15)
-        # plt.yticks(fontsize=15)
-        #
-        # plt.tight_layout()
-        # plt.show()
-
-        # p_pde = self.get_p(model, x_pde, t_pde).detach().cpu().numpy()
-        # p_end = self.get_p(model, x_coup, t_coup).detach().cpu().numpy()
-        # u_end = self.get_u(model, x_coup, t_coup).detach().cpu().numpy()
         u_t_end, p_end, p_t_end = self.get_end_for_radiation(model, x_coup, t_coup)
-        # p_fd = self.get_p(model, x_fd, t_fd).detach().cpu().numpy()
-
 
         data_to_save = {
             'p_end': p_end,
             'u_t_end': u_t_end,
             'p_t_end': p_t_end
         }
+        # TODO: Needed to be changed to your path
         file_name = '/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/radiation_for_predict_end_noise_snr_40.mat'
-        # with open(file_name, 'wb') as file:
-        #     pickle.dump(data_to_save, file)
         scipy.io.savemat(file_name, data_to_save)
 
         print(f"Data saved to {file_name}")
-
-
-        # self.vis_p(x_pde, t_pde, p_pde)
-        # self.vis_p_loc(t_coup, p_coup, 'end')
-
-
-        # data_to_save = {
-        #     't_coup': t_coup,
-        #     'p_coup': p_coup
-        # }
-        # file_name = '/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/p_end_predict_noise_snr_40.pkl'
-        # with open(file_name, 'wb') as file:
-        #     pickle.dump(data_to_save, file)
-        #
-        # print(f"Data saved to {file_name}")
-        #
-        # self.plot_losses(tot_losses, E_losses, B_losses, P_losses)
-        #
-        #
-        # plt.tight_layout()
-        # plt.show()
-        #
-        # # with open("/nas/home/xluan/thesis-xinmeng/PINN_wind/result/ori/inverse_fourier_openwind_rad_op4/alphas_betas_adam.pkl", "wb") as file:
-        # #     pickle.dump({"alphas": alphas, "betas": betas}, file)
-        # # print('saved.')
-        #
-        # # print('\t delta: {:.6f}'.format(model.rad_alpha.detach().cpu().numpy()))
-        # # print('\t beta_chaigne: {:.6f}'.format(model.rad_beta.detach().cpu().numpy()))
 
     def save_model_lbfgs(self, model, optimizer, epoch, tot_losses, E_losses, B_losses, P_losses, R_losses, O1_losses, O2_losses, rad_alphas, rad_betas,  path):
         torch.save({
@@ -591,11 +430,7 @@ class Trainer:
         self.E_losses = [loss for loss in E_losses]
         self.B_losses = [loss for loss in B_losses]
         self.P_losses = [loss for loss in P_losses]
-        # self.R_losses = [loss for loss in R_losses]
         self.O1_losses = [loss for loss in O1_losses]
-        # self.O2_losses = [loss for loss in O2_losses]
-        # self.rad_alphas = [loss for loss in alphas]
-        # self.rad_betas = [loss for loss in betas]
 
         (x_pde, t_pde, x_bc, t_bc, x_coup, t_coup, x_per0, t_per0, x_perT, t_perT,
          x_end_ob, t_end_ob, p_end_infinite_flanged) = self.get_data()
@@ -606,43 +441,28 @@ class Trainer:
             optimizer.zero_grad()
             l_E, p = self.pde_loss(model, x_pde, t_pde)
             l_B = self.bc_loss(model, x_bc, t_bc)
-            # l_R = self.bc_rad_loss(model, x_coup, t_coup)
             l_Pu, l_Pp, l_Pt = self.periodicity_loss(model, x_per0, t_per0, x_perT, t_perT)
             l_O1 = self.obser_loss(model, x_end_ob, t_end_ob, p_end_infinite_flanged)
-            # l_O2 = self.obser_loss(model, x_all_ob, t_all_ob, p_all_infinite_flanged)
-
             l_E = PARA.lambda_E * l_E
             l_B = PARA.lambda_B * l_B
-            # l_R = PARA.lambda_rad * l_R
             l_P = PARA.lambda_P * (PARA.lambda_u * l_Pu + PARA.lambda_p * l_Pp + PARA.lambda_t * l_Pt)
             l_O1 = 1 * PARA.lambda_P * PARA.lambda_p * l_O1
-            # l_O2 = 1 * PARA.lambda_P * PARA.lambda_p * l_O2
 
             loss = (l_E + l_B  + l_P + l_O1 )
-
             loss.backward()
 
             self.tot_losses.append(loss.detach().cpu().item())
             self.E_losses.append(l_E.detach().cpu().item())
             self.B_losses.append(l_B.detach().cpu().item())
             self.P_losses.append(l_P.detach().cpu().item())
-            # self.R_losses.append(l_R.detach().cpu().item())
             self.O1_losses.append(l_O1.detach().cpu().item())
-            # self.O2_losses.append(l_O2.detach().cpu().item())
-            # self.rad_alphas.append(model.rad_alpha.detach().cpu().numpy())
-            # self.rad_betas.append(model.rad_beta.detach().cpu().numpy())
 
             if (epoch+1) % 50 == 0:
                 print('Train\t Epoch: {:3} \tTotal Loss: {:.6f}'.format(epoch, loss))
                 print('\t PDE Loss: {:.6f}'.format(l_E))
                 print('\t BC Loss: {:.6f}'.format(l_B))
-                # print('\t Radiation Loss: {:.6f}'.format(l_R))
                 print('\t Periodicity Loss: {:.6f}'.format(l_P))
                 print('\t Observation Loss end: {:.6f}'.format(l_O1))
-                # print('\t Observation Loss all: {:.6f}'.format(l_O2))
-                # print('\t alpha: {:.6f}'.format(model.rad_alpha.detach().cpu().numpy()))
-                # print('\t beta: {:.6f}'.format(model.rad_beta.detach().cpu().numpy()))
-
 
             return loss
 
@@ -652,8 +472,7 @@ class Trainer:
             torch.cuda.empty_cache()
 
             if (epoch+1) % 100 == 0:
-                # self.vis_p(x_pde, t_pde, p)
-
+                # TODO: Needed to be changed to your path
                 save_path = (
                     f'/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/norad_noise_snr40/'
                     f'inverse_model_LBFGS_{epoch + 1}.pth')
@@ -668,30 +487,9 @@ class Trainer:
     def test_continue(self, model_path):
         model, main_optimizer, epoch, tot_losses, E_losses, B_losses, P_losses, O1_losses = \
             self.load_trained_model(self.model, self.main_optimizer, model_path)
-        # tot_losses = [loss for loss in tot_losses]
-        # E_losses = [loss for loss in E_losses]
-        # B_losses = [loss for loss in B_losses]
-        # P_losses = [loss for loss in P_losses]
-        # # R_losses = [loss for loss in R_losses]
-        # O1_losses = [loss for loss in O1_losses]
-        # # O2_losses = [loss for loss in O2_losses]
-        # # alphas= [loss for loss in alphas]
-        # # betas= [loss for loss in betas]
 
         (x_pde, t_pde, x_bc, t_bc, x_coup, t_coup, x_per0, t_per0, x_perT, t_perT,
          x_end_ob, t_end_ob, p_end_infinite_flanged) = self.get_data()
-
-        # u_t_end, p_end, p_t_end = self.get_end_for_radiation(model, x_coup, t_coup)
-        # data_to_save = {
-        #     'p_end': p_end,
-        #     'u_t_end': u_t_end,
-        #     'p_t_end': p_t_end
-        # }
-        # -
-        # # with open(file_name, 'wb') as file:
-        # #     pickle.dump(data_to_save, file)
-        # scipy.io.savemat(file_name, data_to_save)
-        # print(f"Data saved to {file_name}")
 
         x_fd = torch.linspace(-1, 1, 5001).to(device)
         t_fd = torch.linspace(-1, 1, 1001).to(device)
@@ -707,6 +505,7 @@ class Trainer:
         data_to_save = {
                     'p_fd': p_fd
                 }
+        # TODO: Needed to be changed to your path
         file_name = '/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/p_all_predict_noise_snr_40_lbfgs.pkl'
         with open(file_name, 'wb') as file:
             pickle.dump(data_to_save, file)
@@ -715,14 +514,11 @@ class Trainer:
         print('')
 
     def load_trained_model_for_prediction(self,model, path):
-        # Load the checkpoint
 
         checkpoint = torch.load(path)
 
         # Restore the model and optimizer state dictionaries
         model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-        # main_optimizer.load_state_dict(checkpoint['main_optimizer_state_dict'])
-        # addi_optimizer.load_state_dict(checkpoint['addi_optimizer_state_dict'])
 
         # Retrieve the epoch and loss values
         epoch = checkpoint['epoch']
@@ -730,11 +526,7 @@ class Trainer:
         E_losses = checkpoint['E_losses']
         B_losses = checkpoint['B_losses']
         P_losses = checkpoint['P_losses']
-        # R_losses = checkpoint['R_losses']
         O1_losses = checkpoint['O1_losses']
-        # O2_losses = checkpoint['O2_losses']
-        # alphas = checkpoint['rad_alphas']
-        # betas = checkpoint['rad_betas']
 
         return model,  epoch, tot_losses, E_losses, B_losses, P_losses, O1_losses
 
@@ -742,7 +534,6 @@ class Trainer:
         torch.save({
             'model_state_dict': model.state_dict(),
             'main_optimizer_state_dict': main_optimizer.state_dict(),
-            # 'addi_optimizer_state_dict': addi_optimizer.state_dict(),
             'epoch': epoch,
             'tot_losses': tot_losses,
             'E_losses': E_losses,
@@ -750,8 +541,6 @@ class Trainer:
             'P_losses': P_losses,
             'R_losses': R_losses,
             'O1_losses': O1_losses,
-            # 'O2_losses': O2_losses,
-            # 'p': p,
             'rad_alphas': rad_alphas,
             'rad_betas': rad_betas
         }, path)
@@ -763,11 +552,7 @@ class Trainer:
         self.E_losses = [loss for loss in E_losses]
         self.B_losses = [loss for loss in B_losses]
         self.P_losses = [loss for loss in P_losses]
-        # self.R_losses = [loss for loss in R_losses]
         self.O1_losses = [loss for loss in O1_losses]
-        # self.O2_losses = [loss for loss in O2_losses]
-        # self.rad_alphas = [loss for loss in alphas]
-        # self.rad_betas = [loss for loss in betas]
 
         (x_pde, t_pde, x_bc, t_bc, x_coup, t_coup, x_per0, t_per0, x_perT, t_perT,
          x_end_ob, t_end_ob, p_end_infinite_flanged) = self.get_data()
@@ -780,14 +565,10 @@ class Trainer:
         main_optimizer = torch.optim.Adam(nn_params,lr=lr_main,weight_decay=0)
         addi_optimizer = torch.optim.Adam(addi_params, lr=lr_addi, weight_decay=0)
 
-        # addi_scheduler = ExponentialLR(addi_optimizer, gamma=0.99)
-        # tolerance = 1000
-        # counter = 0
-
         for epoch in tqdm(range(self.n_epochs), desc="Training Epochs", leave=True):
             main_optimizer.zero_grad()
             addi_optimizer.zero_grad()
-            # single batch
+
             l_E, p = self.pde_loss(model, x_pde, t_pde)
             l_B = self.bc_loss(model, x_bc, t_bc)
             l_R = self.bc_rad_loss(model, x_coup, t_coup)
@@ -810,13 +591,6 @@ class Trainer:
 
             addi_optimizer.step()
             addi_optimizer.param_groups[0]['lr'] = self.lr_schedule(lr_addi, PARA.beta, epoch)
-            # counter += 1
-            # if counter >= tolerance:
-            #     addi_scheduler.step()
-            #     counter = 0
-
-            # print(f"Epoch {epoch}: Learning Rate = {addi_scheduler.get_last_lr()[0]:.6f}")
-            # addi_optimizer.param_groups[0]['lr'] = self.lr_schedule(1e-2, PARA.beta, epoch)
 
             self.tot_losses.append(loss.detach().cpu().item())
             self.E_losses.append(l_E.detach().cpu().item())
@@ -835,7 +609,6 @@ class Trainer:
                 print('\t Radiation Loss: {:.6f}'.format(l_R))
                 print('\t Periodicity Loss: {:.6f}'.format(l_P))
                 print('\t Observation Loss end: {:.6f}'.format(l_O1))
-                # print('\t Observation Loss all: {:.6f}'.format(l_O2))
                 print('\t alpha: {:.6f}'.format(model.rad_alpha.detach().cpu().numpy()))
                 print('\t beta: {:.6f}'.format(model.rad_beta.detach().cpu().numpy()))
 
@@ -843,8 +616,7 @@ class Trainer:
             torch.cuda.empty_cache()
 
             if (epoch+1) % 500 == 0:
-                # self.vis_p(x_pde, t_pde, p)
-
+                # TODO: Needed to be changed to your path
                 save_path = (f'/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/norad_noise_snr40/'
                              f'inverse_model_predict_radiation_2_{epoch + 1}.pth')
                 self.save_model_predict_rad(model, main_optimizer, epoch, self.tot_losses,  self.E_losses, self.B_losses, self.P_losses,
@@ -860,11 +632,7 @@ class Trainer:
         self.E_losses = [loss for loss in E_losses]
         self.B_losses = [loss for loss in B_losses]
         self.P_losses = [loss for loss in P_losses]
-        # self.R_losses = [loss for loss in R_losses]
         self.O1_losses = [loss for loss in O1_losses]
-        # self.O2_losses = [loss for loss in O2_losses]
-        # self.rad_alphas = [loss for loss in alphas]
-        # self.rad_betas = [loss for loss in betas]
 
         (x_pde, t_pde, x_bc, t_bc, x_coup, t_coup, x_per0, t_per0, x_perT, t_perT,
          x_end_ob, t_end_ob, p_end_infinite_flanged) = self.get_data()
@@ -878,14 +646,12 @@ class Trainer:
             l_R = self.bc_rad_loss(model, x_coup, t_coup)
             l_Pu, l_Pp, l_Pt = self.periodicity_loss(model, x_per0, t_per0, x_perT, t_perT)
             l_O1 = self.obser_loss(model, x_end_ob, t_end_ob, p_end_infinite_flanged)
-            # l_O2 = self.obser_loss(model, x_all_ob, t_all_ob, p_all_infinite_flanged)
 
             l_E = PARA.lambda_E * l_E
             l_B = PARA.lambda_B * l_B
             l_R = PARA.lambda_rad * l_R
             l_P = PARA.lambda_P * (PARA.lambda_u * l_Pu + PARA.lambda_p * l_Pp + PARA.lambda_t * l_Pt)
             l_O1 = 1 * PARA.lambda_P * PARA.lambda_p * l_O1
-            # l_O2 = 1 * PARA.lambda_P * PARA.lambda_p * l_O2
 
             loss = (l_E + l_B  + l_P + l_O1 +l_R)
 
@@ -897,7 +663,6 @@ class Trainer:
             self.P_losses.append(l_P.detach().cpu().item())
             self.R_losses.append(l_R.detach().cpu().item())
             self.O1_losses.append(l_O1.detach().cpu().item())
-            # self.O2_losses.append(l_O2.detach().cpu().item())
             self.rad_alphas.append(model.rad_alpha.detach().cpu().numpy())
             self.rad_betas.append(model.rad_beta.detach().cpu().numpy())
 
@@ -908,7 +673,6 @@ class Trainer:
                 print('\t Radiation Loss: {:.6f}'.format(l_R))
                 print('\t Periodicity Loss: {:.6f}'.format(l_P))
                 print('\t Observation Loss end: {:.6f}'.format(l_O1))
-                # print('\t Observation Loss all: {:.6f}'.format(l_O2))
                 print('\t alpha: {:.6f}'.format(model.rad_alpha.detach().cpu().numpy()))
                 print('\t beta: {:.6f}'.format(model.rad_beta.detach().cpu().numpy()))
 
@@ -921,8 +685,7 @@ class Trainer:
             torch.cuda.empty_cache()
 
             if (epoch+1) % 100 == 0:
-                # self.vis_p(x_pde, t_pde, p)
-
+                # TODO: Needed to be changed to your path
                 save_path = (
                     f'/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/norad_noise_snr40/'
                     f'inverse_model_predict_radiation_LBFGS_{epoch + 1}.pth')
@@ -934,16 +697,9 @@ class Trainer:
         return model
 
     def load_trained_model_for_prediction_2(self,model, path):
-        # Load the checkpoint
-
         checkpoint = torch.load(path)
-
-        # Restore the model and optimizer state dictionaries
         model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-        # main_optimizer.load_state_dict(checkpoint['main_optimizer_state_dict'])
-        # addi_optimizer.load_state_dict(checkpoint['addi_optimizer_state_dict'])
 
-        # Retrieve the epoch and loss values
         epoch = checkpoint['epoch']
         tot_losses = checkpoint['tot_losses']
         E_losses = checkpoint['E_losses']
@@ -951,7 +707,6 @@ class Trainer:
         P_losses = checkpoint['P_losses']
         R_losses = checkpoint['R_losses']
         O1_losses = checkpoint['O1_losses']
-        # O2_losses = checkpoint['O2_losses']
         alphas = checkpoint['rad_alphas']
         betas = checkpoint['rad_betas']
 
@@ -966,7 +721,6 @@ class Trainer:
         self.P_losses = [loss for loss in P_losses]
         self.R_losses = [loss for loss in R_losses]
         self.O1_losses = [loss for loss in O1_losses]
-        # self.O2_losses = [loss for loss in O2_losses]
         self.rad_alphas = [loss for loss in alphas]
         self.rad_betas = [loss for loss in betas]
 
@@ -982,14 +736,12 @@ class Trainer:
             l_R = self.bc_rad_loss(model, x_coup, t_coup)
             l_Pu, l_Pp, l_Pt = self.periodicity_loss(model, x_per0, t_per0, x_perT, t_perT)
             l_O1 = self.obser_loss(model, x_end_ob, t_end_ob, p_end_infinite_flanged)
-            # l_O2 = self.obser_loss(model, x_all_ob, t_all_ob, p_all_infinite_flanged)
 
             l_E = PARA.lambda_E * l_E
             l_B = PARA.lambda_B * l_B
             l_R = PARA.lambda_rad * l_R
             l_P = PARA.lambda_P * (PARA.lambda_u * l_Pu + PARA.lambda_p * l_Pp + PARA.lambda_t * l_Pt)
             l_O1 = 1 * PARA.lambda_P * PARA.lambda_p * l_O1
-            # l_O2 = 1 * PARA.lambda_P * PARA.lambda_p * l_O2
 
             loss = (l_E + l_B  + l_P + l_O1 +l_R)
 
@@ -1001,7 +753,6 @@ class Trainer:
             self.P_losses.append(l_P.detach().cpu().item())
             self.R_losses.append(l_R.detach().cpu().item())
             self.O1_losses.append(l_O1.detach().cpu().item())
-            # self.O2_losses.append(l_O2.detach().cpu().item())
             self.rad_alphas.append(model.rad_alpha.detach().cpu().numpy())
             self.rad_betas.append(model.rad_beta.detach().cpu().numpy())
 
@@ -1012,7 +763,6 @@ class Trainer:
                 print('\t Radiation Loss: {:.6f}'.format(l_R))
                 print('\t Periodicity Loss: {:.6f}'.format(l_P))
                 print('\t Observation Loss end: {:.6f}'.format(l_O1))
-                # print('\t Observation Loss all: {:.6f}'.format(l_O2))
                 print('\t alpha: {:.6f}'.format(model.rad_alpha.detach().cpu().numpy()))
                 print('\t beta: {:.6f}'.format(model.rad_beta.detach().cpu().numpy()))
 
@@ -1025,8 +775,7 @@ class Trainer:
             torch.cuda.empty_cache()
 
             if (epoch+1) % 100 == 0:
-                # self.vis_p(x_pde, t_pde, p)
-
+                # TODO: Needed to be changed to your path
                 save_path = (
                     f'/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/norad_noise_snr40/'
                     f'inverse_model_predict_radiation_continue_LBFGS_2_{epoch + 1}.pth')
@@ -1046,7 +795,6 @@ class Trainer:
         self.P_losses = [loss for loss in P_losses]
         self.R_losses = [loss for loss in R_losses]
         self.O1_losses = [loss for loss in O1_losses]
-        # self.O2_losses = [loss for loss in O2_losses]
         self.rad_alphas = [loss for loss in alphas]
         self.rad_betas = [loss for loss in betas]
 
@@ -1055,72 +803,26 @@ class Trainer:
         epoch_index = np.concatenate([epoch_index_1, epoch_index_2])
         fig, axs = plt.subplots(2, 1, figsize=(12, 10))  # 2 rows, 1 column
 
-        # Plot P Loss in the first subplot
         axs[0].plot(epoch_index, self.rad_alphas,  color='green', linestyle='-', linewidth=2)
-        # axs[0].set_yscale('log')
-        # axs[0].set_title('P Loss Over Epochs', fontsize=14)
         axs[0].set_xlabel('Epoch', fontsize=30)
         axs[0].set_ylabel(r'$\alpha$', fontsize=30)
-        # axs[0].legend(loc='upper right', fontsize=10)
         axs[0].grid(True, which='both')
         axs[0].tick_params(axis='x', labelsize=30)
         axs[0].tick_params(axis='y', labelsize=30)
         axs[0].axhline(y=1.2142, color='black', linestyle='-', linewidth=2)
 
-        # Plot B Loss in the second subplot
         axs[1].plot(epoch_index, self.rad_betas,  color='green', linestyle='-', linewidth=2)
-        # axs[1].set_yscale('log')
-        # axs[1].set_title('B Loss Over Epochs', fontsize=14)
         axs[1].set_xlabel('Epoch', fontsize=30)
         axs[1].set_ylabel(r'$\beta$', fontsize=30)
-        # axs[1].legend(loc='upper right', fontsize=10)
         axs[1].grid(True, which='both')
         axs[1].tick_params(axis='x', labelsize=30)
         axs[1].tick_params(axis='y', labelsize=30)
         axs[1].axhline(y=0.7371, color='black', linestyle='-', linewidth=2)
 
-        # Adjust layout and show the plots
         plt.tight_layout()
+        # TODO: Needed to be changed to your path
         plt.savefig('/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/alpha_beta_epochs.png', dpi=300)
         plt.show()
-
-        # (x_pde, t_pde, x_bc, t_bc, x_coup, t_coup, x_per0, t_per0, x_perT, t_perT,
-        #  x_end_ob, t_end_ob, p_end_infinite_flanged) = self.get_data()
-
-        # u_t_end, p_end, p_t_end = self.get_end_for_radiation(model, x_coup, t_coup)
-        # data_to_save = {
-        #     'p_end': p_end,
-        #     'u_t_end': u_t_end,
-        #     'p_t_end': p_t_end
-        # }
-        # -
-        # # with open(file_name, 'wb') as file:
-        # #     pickle.dump(data_to_save, file)
-        # scipy.io.savemat(file_name, data_to_save)
-        # print(f"Data saved to {file_name}")
-
-        # x_fd = torch.linspace(-1, 1, 5001).to(device)
-        # t_fd = torch.linspace(-1, 1, 1001).to(device)
-        # x_fd, t_fd = torch.meshgrid(x_fd, t_fd, indexing='ij')
-        # x_fd.requires_grad = True
-        # t_fd.requires_grad = True
-        # p_fd = []
-        # for index in range(x_fd.shape[1]):
-        #     p_tmp = self.get_p(model, x_fd[:, index].squeeze(), t_fd[:, index].squeeze()).detach().cpu().numpy()
-        #     p_fd.append(p_tmp)
-        # p_fd = np.array(p_fd).T
-        #
-        # data_to_save = {
-        #             'p_fd': p_fd
-        #         }
-        # file_name = '/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/p_all_predict_noise_snr_40_lbfgs.pkl'
-        # with open(file_name, 'wb') as file:
-        #     pickle.dump(data_to_save, file)
-        #
-        # print(f"Data saved to {file_name}")
-        # print('')
-
-
 
 def start( mode):
     if mode == 'predict_rad':
@@ -1133,6 +835,7 @@ def start( mode):
         trainer = Trainer(model, main_optimizer, 20002)
 
         epoch_test = 3000
+        # TODO: Needed to be changed to your path
         trained_model_path = (f'/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/norad_noise_snr40/'
                               f'inverse_model_LBFGS_{epoch_test}.pth')
         trainer.continue_predict_radiation(trained_model_path)
@@ -1147,6 +850,7 @@ def start( mode):
         trainer = Trainer(model, main_optimizer, 20002)
 
         epoch_test = 3000
+        # TODO: Needed to be changed to your path
         trained_model_path = (
             f'/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/norad_noise_snr40/'
             f'inverse_model_LBFGS_{epoch_test}.pth')
@@ -1162,6 +866,7 @@ def start( mode):
         trainer = Trainer(model, main_optimizer, 20002)
 
         epoch_test = 20000
+        # TODO: Needed to be changed to your path
         trained_model_path  = (f'/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/norad_noise_snr40/'
                      f'inverse_model_predict_radiation_2_{epoch_test}.pth')
         trainer.continue_predict_radiation_lbfgs_2(trained_model_path)
@@ -1173,6 +878,7 @@ def start( mode):
         trainer = Trainer(model, main_optimizer, 20002)
 
         epoch_test = 1500
+        # TODO: Needed to be changed to your path
         trained_model_path = (
             f'/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/norad_noise_snr40/'
             f'inverse_model_predict_radiation_continue_LBFGS_2_{epoch_test}.pth')
@@ -1185,43 +891,30 @@ def start( mode):
 
         N_total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"Total trainable parameters: {N_total_params}")
-        #
-        # addi_params = [model.rad_alpha, model.rad_beta]
-        # addi_params_ids = set(id(param) for param in addi_params)
-
-        # nn_params = [param for param in model.parameters() if id(param) not in addi_params_ids]
         N_nn_params = sum(param.numel() for param in model.parameters())
         print(f"NN trainable parameters: {N_nn_params}")
 
         main_optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=0)
-        # addi_optimizer = torch.optim.Adam(addi_params,lr=1e-2,weight_decay=0)
-
-        # optimizer = torch.optim.Adam(model.parameters(), lr=PARA.lr, weight_decay=0)
-        # trained_model = train(model, optimizer, PARA.epoch)
-
         trainer = Trainer(model, main_optimizer, 20002)
 
         if mode == 'train':
             print("Start training...")
             trained_model = trainer.train()
         elif mode == 'test':
-            # test
             print("Start testing..=")
-            epoch_test = 20000
-            trained_model_path = (f'/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/norad_noise_snr40/'
-                                         f'inverse_model_{epoch_test}.pth')
+            # TODO: Needed to be changed to your path
+            trained_model_path = (f'inverse_radiation/model/pinn_adam_20000epoch_stage1.pth')
             trainer.test(trained_model_path)
 
         elif mode == 'train_lbfgs':
-            # # L-BFGS
             epoch_test = 20000
+            # TODO: Needed to be changed to your path
             trained_model_path = (f'/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/'
                                          f'inverse_model_{epoch_test}.pth')
             trainer.continue_train(trained_model_path)
         elif mode == 'test_lbfgs':
             epoch_test = 1000
-            # trained_model_path = (f'/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/'
-            #                              f'inverse_model_{epoch_test}.pth')
+            # TODO: Needed to be changed to your path
             trained_model_path = (
                 f'/nas/home/xluan/thesis-xinmeng/PINN_wind/result/fa2025/infinite_flanged/norad_noise_snr40/'
                 f'inverse_model_LBFGS_{epoch_test}.pth')
@@ -1229,7 +922,7 @@ def start( mode):
             trainer.test_continue(trained_model_path)
     return
 
-
-mode = 'test_predict_rad_lbfgs' #predict_rad_lbfgs
+#'predict_rad', 'predict_rad_lbfgs', 'predict_rad_lbfgs_2', 'test_predict_rad_lbfgs','train', 'test','test_lbfgs'
+mode = 'test'
 print('Start.....')
 start(mode)
